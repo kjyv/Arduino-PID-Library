@@ -117,6 +117,8 @@ void PID::SetTunings(double Kp, double Ki, double Kd, int POn)
       ki = (0 - ki);
       kd = (0 - kd);
    }
+
+   if (Ki == 0) {integrator = 0;}
 }
 
 /* SetTunings(...)*************************************************************
