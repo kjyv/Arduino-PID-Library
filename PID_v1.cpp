@@ -176,7 +176,7 @@ void PID::SetSampleTime(int NewSampleTime)
    }
 }
 
-void SetSmoothingFactor(double alpha) {
+void PID::SetSmoothingFactor(double alpha) {
    filterAlpha = alpha;
 }
 
