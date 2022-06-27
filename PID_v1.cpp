@@ -26,7 +26,8 @@ PID::PID(double *Input, double *Output, double *Setpoint,
    inAuto = false;
 
    PID::SetOutputLimits(0, 255);			   //default output limit corresponds to
-												      //the arduino pwm limits
+                                          //the arduino pwm limits
+   PID::SetIntegratorLimits(0, 255);      //integrator limits default to same limits as output
 
    SampleTime = 100;							//default Controller Sample Time is 0.1 seconds
 
@@ -59,33 +60,69 @@ bool PID::Compute()
    unsigned long timeChange = (now - lastTime);
    if (timeChange>=SampleTime)
    {
-      /*Compute all the working error variables*/
+      // Compute all the working error variables
       double input = *myInput;
       double error = *mySetpoint - input;
-      double dInput = (input - lastInput);
-      outputSum+= (ki * error);
+   
+      //Integral Part      
+      //added: don't let I part sum grow if output is already at max (from e.g. P alone), c.f. https://github.com/br3ttb/Arduino-PID-Library/issues/76
+      if (!pOnE || (*myOutput < outMax - 0.01 && *myOutput > outMin + 0.01)) {
+         integrator += (ki * error);
+      }
 
-      /*Add Proportional on Measurement, if P_ON_M is specified*/
-      if(!pOnE) outputSum-= kp * dInput;
+      //use Exponentially weighted moving average as low pass filter of input data
+      double oldFiltered = lastFilteredInput;
 
-      if(outputSum > outMax) outputSum= outMax;
-      else if(outputSum < outMin) outputSum= outMin;
+      //smoothing factor: roughly, the higher the value, the lower are the allowed frequencies to pass (but the longer the delay for changes to have an effect)
+      double alpha = 0.9;
 
-      /*Add Proportional on Error, if P_ON_E is specified*/
-	   double output;
+      //calc new IIR filtered value
+      lastFilteredInput = alpha * oldFiltered + (1-alpha) * input;
+
+      //calc filtered input differential
+      //(the controller uses negative of derived input instead of derived error, since it's equal when assuming setpoint is constant - solves derivative kick)
+      double dInput = 0;
+      if (pOnE) {
+         dInput = (lastFilteredInput - oldFiltered); // /(SampleTime/1000);
+      } else {
+         //PonM seems to need sensor noise to even start
+         dInput = input - lastInput;
+      }
+
+      // Add Proportional on Measurement, if P_ON_M is specified
+      // (kp is used in additional D part (and no P part anymore) but it affects only the I sum,
+      // not the output which includes the other D part)
+      if (!pOnE) integrator-= kp * dInput;
+
+      // Apply output limits to I sum (worst case anti-windup, see http://brettbeauregard.com/blog/2011/04/improving-the-beginner%e2%80%99s-pid-reset-windup/)
+      if (integrator > outMax) integrator = outMax;
+      else if (integrator < outMin) integrator = outMin;
+
+      //limit integrator to its own limits (only if in normal PID mode, not PonM)
+      if (pOnE) {
+         if (integrator > integratorMax) integrator = integratorMax;
+         else if (integrator < integratorMin) integrator = integratorMin;
+      }
+
+      // Add Proportional on Error, if P_ON_E is specified
+      double output;
       if (pOnE) output = kp * error;
       else output = 0;
 
-      /*Compute Rest of PID Output*/
-      output += outputSum - kd * dInput;
+      // Add D part to integral sum and add to output 
+      output += integrator - kd * dInput;
 
       // Limit overall output again
       if (output > outMax) output = outMax;
       else if (output < outMin) output = outMin;
       *myOutput = output;
 
-      /*Remember some variables for next time*/
+      // Remember some variables for next time
+      lastFilteredDifferential = dInput;
       lastInput = input;
+      lastPPart = pOnE ? kp * error : 0; 
+      lastDPart = - kd * dInput;
+      lastError = error;
       lastTime = now;
       return true;
    }
@@ -111,7 +148,7 @@ void PID::SetTunings(double Kp, double Ki, double Kd, int POn)
    ki = Ki * SampleTimeInSec;
    kd = Kd / SampleTimeInSec;
 
-   if(controllerDirection == REVERSE)
+   if (controllerDirection == REVERSE)
    {
       kp = (0 - kp);
       ki = (0 - ki);
@@ -125,7 +162,7 @@ void PID::SetTunings(double Kp, double Ki, double Kd, int POn)
  * Set Tunings using the last-rembered POn setting
  ******************************************************************************/
 void PID::SetTunings(double Kp, double Ki, double Kd){
-    SetTunings(Kp, Ki, Kd, pOn); 
+   SetTunings(Kp, Ki, Kd, pOn); 
 }
 
 /* SetSampleTime(...) *********************************************************
@@ -135,8 +172,7 @@ void PID::SetSampleTime(int NewSampleTime)
 {
    if (NewSampleTime > 0)
    {
-      double ratio  = (double)NewSampleTime
-                      / (double)SampleTime;
+      double ratio  = (double)NewSampleTime / (double)SampleTime;
       ki *= ratio;
       kd /= ratio;
       SampleTime = (unsigned long)NewSampleTime;
@@ -159,11 +195,24 @@ void PID::SetOutputLimits(double Min, double Max)
 
    if(inAuto)
    {
-      if(*myOutput > outMax) *myOutput = outMax;
-      else if(*myOutput < outMin) *myOutput = outMin;
+      if (*myOutput > outMax) *myOutput = outMax;
+      else if (*myOutput < outMin) *myOutput = outMin;
 
-	   if(outputSum > outMax) outputSum= outMax;
-	   else if(outputSum < outMin) outputSum= outMin;
+      if (integrator > outMax) integrator = outMax;
+      else if (integrator < outMin) integrator = outMin;
+   }
+}
+
+void PID::SetIntegratorLimits(double Min, double Max)
+{
+   if (Min >= Max) return;
+   integratorMin = Min;
+   integratorMax = Max;
+
+   if (inAuto)
+   {
+      if (integrator > integratorMax) integrator = integratorMax;
+      else if (integrator < integratorMin) integrator = integratorMin;
    }
 }
 
@@ -174,12 +223,12 @@ void PID::SetOutputLimits(double Min, double Max)
  ******************************************************************************/
 void PID::SetMode(int Mode)
 {
-    bool newAuto = (Mode == AUTOMATIC);
-    if(newAuto && !inAuto)
-    {  /*we just went from manual to auto*/
-        PID::Initialize();
-    }
-    inAuto = newAuto;
+   bool newAuto = (Mode == AUTOMATIC);
+   if (newAuto && !inAuto)
+   {  // we just went from manual to auto
+      PID::Initialize();
+   }
+   inAuto = newAuto;
 }
 
 /* Initialize()****************************************************************
@@ -188,10 +237,11 @@ void PID::SetMode(int Mode)
  ******************************************************************************/
 void PID::Initialize()
 {
-   outputSum = *myOutput;
-   lastInput = *myInput;
-   if(outputSum > outMax) outputSum = outMax;
-   else if(outputSum < outMin) outputSum = outMin;
+   integrator = *myOutput;
+   lastInput = lastFilteredInput = *myInput;
+
+   if (integrator > outMax) integrator = outMax;
+   else if (integrator < outMin) integrator = outMin;
 }
 
 /* SetControllerDirection(...)*************************************************
@@ -202,7 +252,7 @@ void PID::Initialize()
  ******************************************************************************/
 void PID::SetControllerDirection(int Direction)
 {
-   if(inAuto && Direction !=controllerDirection)
+   if (inAuto && Direction != controllerDirection)
    {
       kp = (0 - kp);
       ki = (0 - ki);
@@ -221,3 +271,9 @@ double PID::GetKi(){ return  dispKi;}
 double PID::GetKd(){ return  dispKd;}
 int PID::GetMode(){ return  inAuto ? AUTOMATIC : MANUAL;}
 int PID::GetDirection() { return controllerDirection; }
+bool PID::GetPonE() { return pOnE; }
+double PID::GetDeltaInput() { return lastFilteredDifferential; }
+double PID::GetInputError() { return lastError; }
+double PID::GetLastPPart() { return lastPPart; }
+double PID::GetLastIPart() { return integrator; }
+double PID::GetLastDPart() { return lastDPart; }
