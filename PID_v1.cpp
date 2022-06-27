@@ -27,7 +27,7 @@ PID::PID(double *Input, double *Output, double *Setpoint,
 
    PID::SetOutputLimits(0, 255);			   //default output limit corresponds to
                                           //the arduino pwm limits
-   PID::SetIntegratorLimits(0, 255);      //set integrator limits default to same limits as output
+   PID::SetIntegratorLimits(-100, 100);   //set default integrator limits
 
    SampleTime = 100;							   //default Controller Sample Time is 0.1 seconds
 
@@ -73,11 +73,8 @@ bool PID::Compute()
       //use Exponentially weighted moving average as low pass filter of input data
       double oldFiltered = lastFilteredInput;
 
-      //smoothing factor: roughly, the higher the value, the lower are the allowed frequencies to pass (but the longer the delay for changes to have an effect)
-      double alpha = 0.9;
-
       //calc new IIR filtered value
-      lastFilteredInput = alpha * lastFilteredInput + (1-alpha) * input;
+      lastFilteredInput = filterAlpha * lastFilteredInput + (1-filterAlpha) * input;
 
       //calc filtered input differential
       //(the controller uses negative of derived input instead of derived error, since it's equal when assuming setpoint is constant - solves derivative kick)
@@ -177,6 +174,10 @@ void PID::SetSampleTime(int NewSampleTime)
       kd /= ratio;
       SampleTime = (unsigned long)NewSampleTime;
    }
+}
+
+void SetSmoothingFactor(double alpha) {
+   filterAlpha = alpha;
 }
 
 /* SetOutputLimits(...)****************************************************

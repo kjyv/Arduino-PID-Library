@@ -52,7 +52,7 @@ public:
   void SetSampleTime(int);              // * sets the frequency, in Milliseconds, with which 
                                           //   the PID calculation is performed.  default is 100
                       
-  // Set smoothing factor for input low pass filtering (e.g. 0.99, the higher, the more filtering)
+  // Set smoothing factor for input low pass filtering (e.g. 0.9, the higher, the more filtering)
   void SetSmoothingFactor(double alpha);
 
   //Getters
@@ -89,6 +89,9 @@ private:
         
   unsigned long lastTime;
   double integrator;             // Integrator sum used in compute loop method
+
+  //filter smoothing factor: roughly, the higher the value, the lower are the allowed frequencies to pass (but the longer the delay for changes to have an effect)
+  double filterAlpha = 0.9;
 
   double lastInput;
   double lastFilteredInput;
