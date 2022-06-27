@@ -27,9 +27,9 @@ PID::PID(double *Input, double *Output, double *Setpoint,
 
    PID::SetOutputLimits(0, 255);			   //default output limit corresponds to
                                           //the arduino pwm limits
-   PID::SetIntegratorLimits(0, 255);      //integrator limits default to same limits as output
+   PID::SetIntegratorLimits(0, 255);      //set integrator limits default to same limits as output
 
-   SampleTime = 100;							//default Controller Sample Time is 0.1 seconds
+   SampleTime = 100;							   //default Controller Sample Time is 0.1 seconds
 
    PID::SetControllerDirection(ControllerDirection);
    PID::SetTunings(Kp, Ki, Kd, POn);
@@ -77,15 +77,15 @@ bool PID::Compute()
       double alpha = 0.9;
 
       //calc new IIR filtered value
-      lastFilteredInput = alpha * oldFiltered + (1-alpha) * input;
+      lastFilteredInput = alpha * lastFilteredInput + (1-alpha) * input;
 
       //calc filtered input differential
       //(the controller uses negative of derived input instead of derived error, since it's equal when assuming setpoint is constant - solves derivative kick)
       double dInput = 0;
       if (pOnE) {
-         dInput = (lastFilteredInput - oldFiltered); // /(SampleTime/1000);
+         dInput = (lastFilteredInput - oldFiltered) / (SampleTime/1000);
       } else {
-         //PonM seems to need sensor noise to even start
+         //PonM seems to need sensor noise to even start, so use unfiltered
          dInput = input - lastInput;
       }
 
